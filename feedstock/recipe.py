@@ -3,6 +3,9 @@
 
 
 import apache_beam as beam
+import zarr
+from dataclasses import dataclass
+import subprocess
 from pangeo_forge_recipes.transforms import (
     OpenURLWithFSSpec,
     OpenWithXarray,
@@ -10,7 +13,7 @@ from pangeo_forge_recipes.transforms import (
 )
 from pangeo_forge_recipes.patterns import FilePattern, ConcatDim, MergeDim
 from pangeo_forge_recipes.transforms import Indexed, T
-from pangeo_forge_big_query import LogToBigQuery
+# from pangeo_forge_big_query import LogToBigQuery, RegisterDatasetToCatalog
 
 
 # --------------- METADATA AND CATALOGING -------------------------------
@@ -20,6 +23,8 @@ meta_yaml_url = (
 )
 dataset_id = 'AGCD'
 catalog_table_id = 'LEAP_data_catalog'
+table_id = 'carbonplan.leap.test_dataset_catalog'
+
 # -----------------------------------------------------------------------
 
 
@@ -29,7 +34,7 @@ catalog_table_id = 'LEAP_data_catalog'
 target_chunks = {"time": 40}
 
 # Time Range
-years = list(range(1971, 1973))  # 2020
+years = list(range(1971, 1972))  # 2020
 
 # Variable List
 variables = ["precip", "tmax"]  # "tmin", "vapourpres_h09", "vapourpres_h15"
@@ -49,6 +54,7 @@ pattern = FilePattern(
     MergeDim(name="variable", keys=variables),
 )
 
+pattern = pattern.prune()
 
 class DropVars(beam.PTransform):
     """
@@ -65,17 +71,50 @@ class DropVars(beam.PTransform):
         return pcoll | beam.Map(self._drop_vars)
 
 
+
+@dataclass
+class SkyPlane(beam.PTransform):
+    
+    dst_store: str
+
+    @staticmethod
+    def _init():
+        # Add skyplane init
+        subprocess.check_call("skyplane init -y --disable-config-azure --disable-config-aws --disable-config-cloudflare", shell=True)
+
+    def _skyplane(self, store):
+        self._init()
+        # target_store = store.path
+        target_store ="gs://carbonplan-scratch/skyplane/target_store/AGDC.zarr"
+        # attempt skyplane transfer through subprocess
+        transfer_str = f"skyplane cp -r -y {target_store} {self.dst_store}"
+        import pdb; pdb.set_trace()
+
+        subprocess.check_call(transfer_str, shell=True)
+        
+        return self.dst_store
+
+    def expand(self, pcoll: beam.PCollection) -> beam.PCollection:
+        return (pcoll
+            | "Copy Zarr" >> beam.Map(self._skyplane)
+        )
+    
 AGCD = (
     beam.Create(pattern.items())
-    | OpenURLWithFSSpec()
-    | OpenWithXarray(file_type=pattern.file_type)
-    | DropVars()
-    | StoreToZarr(
-        store_name="AGCD.zarr",
-        combine_dims=pattern.combine_dim_keys,
-        target_chunks=target_chunks,
-        attrs={"meta_yaml_url": meta_yaml_url},
-    )
-    | "Log to BQ Catalog Table" >> LogToBigQuery(iid=dataset_id, table_id=catalog_table_id)
-
+    # | OpenURLWithFSSpec()
+    # | OpenWithXarray(file_type=pattern.file_type)
+    # | DropVars()
+    # | StoreToZarr(
+    #     store_name="AGCD.zarr",
+    #     target_root = 'gs://carbonplan-scratch/skyplane/target_store/',
+    #     combine_dims=pattern.combine_dim_keys,
+    #     target_chunks=target_chunks,
+    #     attrs={"meta_yaml_url": meta_yaml_url},
+    # )
+    | SkyPlane(dst_store ="gs://carbonplan-scratch/skyplane/dst_store/AGDC.zarr")
+    # | RegisterDatasetToCatalog(table_id=table_id, dataset_id=dataset_id, dataset_url='.')
 )
+
+
+with beam.Pipeline() as p:
+    p | AGCD
