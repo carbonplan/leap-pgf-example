@@ -4,6 +4,7 @@
 
 
 import apache_beam as beam
+import yaml
 from pangeo_forge_recipes.transforms import (
     OpenURLWithFSSpec,
     OpenWithXarray,
@@ -11,16 +12,14 @@ from pangeo_forge_recipes.transforms import (
 )
 from pangeo_forge_recipes.patterns import FilePattern, ConcatDim, MergeDim
 from pangeo_forge_recipes.transforms import Indexed, T
-from data_management_utils import RegisterDatasetToCatalog
+from data_management_utils.utils import RegisterDatasetToCatalog
 
 
 # --------------- METADATA AND CATALOGING -------------------------------
-# Github url to meta.yml:
-meta_yaml_url = (
-    "https://github.com/carbonplan/leap-pgf-example/blob/main/feedstock/meta.yaml"
-)
 dataset_id = "AGCD"
 table_id = "carbonplan.leap.test_dataset_catalog"
+meta_yaml_dict = yaml.safe_load(open("meta.yaml"))
+
 # -----------------------------------------------------------------------
 
 
@@ -73,7 +72,7 @@ AGCD = (
         store_name="AGCD.zarr",
         combine_dims=pattern.combine_dim_keys,
         target_chunks=target_chunks,
-        attrs={"meta_yaml_url": meta_yaml_url},
+        attrs={"meta_yaml": meta_yaml_dict},
     )
     | "Log to carbonplan BQ Catalog Table"
     >> RegisterDatasetToCatalog(table_id=table_id, dataset_id=dataset_id)
