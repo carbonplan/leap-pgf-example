@@ -1,31 +1,20 @@
 # This recipe can be run with `pangeo-forge-runner` with the CLI command:
-# pangeo-forge-runner bake --repo=~/Documents/carbonplan/LEAP/leap-pgf-example/ -f ~/Documents/carbonplan/LEAP/ # noqa: E501
-# leap-pgf-example/feedstock/config.json --Bake.recipe_id=AGCD --Bake.job_name=agcd # noqa: E501
-
+# pangeo-forge-runner bake --repo=~/Documents/carbonplan/leap-pgf-example/ -f ~/Documents/carbonplan/leap-pgf-example/feedstock/config.json --Bake.job_name=recipe
 
 import apache_beam as beam
 from pangeo_forge_recipes.transforms import (
     OpenURLWithFSSpec,
     OpenWithXarray,
     StoreToZarr,
+    StoreToPyramid,
 )
 from pangeo_forge_recipes.patterns import FilePattern, ConcatDim, MergeDim
 from pangeo_forge_recipes.transforms import Indexed, T
-from data_management_utils import RegisterDatasetToCatalog
+import fsspec
+from pangeo_forge_recipes.storage import FSSpecTarget
 
-
-# --------------- METADATA AND CATALOGING -------------------------------
-# Github url to meta.yml:
-meta_yaml_url = (
-    "https://github.com/carbonplan/leap-pgf-example/blob/main/feedstock/meta.yaml"
-)
-dataset_id = "AGCD"
-table_id = "carbonplan.leap.test_dataset_catalog"
 # -----------------------------------------------------------------------
 
-
-# Filename Pattern Inputs
-target_chunks = {"time": 40}
 
 # Time Range
 years = list(range(1971, 1973))  # 2020
@@ -48,6 +37,8 @@ pattern = FilePattern(
     MergeDim(name="variable", keys=variables),
 )
 
+pattern = pattern.prune()
+
 
 class DropVars(beam.PTransform):
     """
@@ -64,17 +55,31 @@ class DropVars(beam.PTransform):
         return pcoll | beam.Map(self._drop_vars)
 
 
-AGCD = (
-    beam.Create(pattern.items())
-    | OpenURLWithFSSpec()
-    | OpenWithXarray(file_type=pattern.file_type)
-    | DropVars()
-    | StoreToZarr(
-        store_name="AGCD.zarr",
-        combine_dims=pattern.combine_dim_keys,
-        target_chunks=target_chunks,
-        attrs={"meta_yaml_url": meta_yaml_url},
+fs = fsspec.get_filesystem_class("file")()
+path = ".pyr_data"
+target_root = FSSpecTarget(fs, path)
+
+# This is confusing, but it works
+
+
+def lazy_graph_mutator(p: beam.Pipeline) -> None:
+    initial = (
+        p
+        | beam.Create(pattern.items())
+        | OpenURLWithFSSpec()
+        | OpenWithXarray(file_type=pattern.file_type)
+        | DropVars()
     )
-    | "Log to carbonplan BQ Catalog Table"
-    >> RegisterDatasetToCatalog(table_id=table_id, dataset_id=dataset_id)
-)
+    initial | "Store Zarr" >> StoreToZarr(
+        store_name="store",
+        combine_dims=pattern.combine_dim_keys,
+    )
+    initial | "Write Pyramid Levels" >> StoreToPyramid(
+        store_name="pyramid",
+        n_levels=2,
+        epsg_code="4326",
+        combine_dims=pattern.combine_dim_keys,
+    )
+
+
+recipe = lazy_graph_mutator
