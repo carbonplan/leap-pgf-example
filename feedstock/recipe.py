@@ -1,80 +1,81 @@
-# This recipe can be run with `pangeo-forge-runner` with the CLI command:
-# pangeo-forge-runner bake --repo=~/Documents/carbonplan/LEAP/leap-pgf-example/ -f ~/Documents/carbonplan/LEAP/ # noqa: E501
-# leap-pgf-example/feedstock/config.json --Bake.recipe_id=AGCD --Bake.job_name=agcd # noqa: E501
+
+
+# pangeo-forge-runner bake \
+#     --config feedstock/config.py \
+#     --repo . \
+#     --Bake.job_name=test1 \
+#     --prune
+
+
+
 
 
 import apache_beam as beam
+import pandas as pd
+
+from pangeo_forge_recipes.patterns import ConcatDim, FilePattern
 from pangeo_forge_recipes.transforms import (
     OpenURLWithFSSpec,
     OpenWithXarray,
     StoreToZarr,
 )
-from pangeo_forge_recipes.patterns import FilePattern, ConcatDim, MergeDim
-from pangeo_forge_recipes.transforms import Indexed, T
-from data_management_utils import RegisterDatasetToCatalog
+
+from leap_data_management_utils import RegisterDatasetToCatalog
 
 
 # --------------- METADATA AND CATALOGING -------------------------------
 # Github url to meta.yml:
 meta_yaml_url = (
-    "https://github.com/carbonplan/leap-pgf-example/blob/main/feedstock/meta.yaml"
+    "https://github.com/carbonplan/leap-pgf-example/blob/main/feedstock/meta3.yaml"
 )
-dataset_id = "AGCD"
-table_id = "carbonplan.leap.test_dataset_catalog"
+
+dataset_id = "dataset_2"
+# table_id = "carbonplan.leap.test_dataset_catalog"
 # -----------------------------------------------------------------------
 
 
-# Filename Pattern Inputs
-target_chunks = {"time": 40}
-
-# Time Range
-years = list(range(1971, 1973))  # 2020
-
-# Variable List
-variables = ["precip", "tmax"]  # "tmin", "vapourpres_h09", "vapourpres_h15"
 
 
-def make_filename(variable, time):
-    if variable == "precip":
-        fpath = f"https://dapds00.nci.org.au/thredds/fileServer/zv2/agcd/v1/{variable}/total/r005/01day/agcd_v1_{variable}_total_r005_daily_{time}.nc"  # noqa: E501
-    else:
-        fpath = f"https://dapds00.nci.org.au/thredds/fileServer/zv2/agcd/v1/{variable}/mean/r005/01day/agcd_v1_{variable}_mean_r005_daily_{time}.nc"  # noqa: E501
-    return fpath
 
+dates = pd.date_range("1981-09-01", "1981-09-03", freq="D")
 
-pattern = FilePattern(
-    make_filename,
-    ConcatDim(name="time", keys=years),
-    MergeDim(name="variable", keys=variables),
+URL_FORMAT = (
+    "https://www.ncei.noaa.gov/data/sea-surface-temperature-optimum-interpolation/"
+    "v2.1/access/avhrr/{time:%Y%m}/oisst-avhrr-v02r01.{time:%Y%m%d}.nc"
 )
 
 
-class DropVars(beam.PTransform):
-    """
-    Custom Beam tranform to drop unused vars
-    """
-
-    @staticmethod
-    def _drop_vars(item: Indexed[T]) -> Indexed[T]:
-        index, ds = item
-        ds = ds.drop_vars(["crs", "lat_bnds", "lon_bnds", "time_bnds"])
-        return index, ds
-
-    def expand(self, pcoll: beam.PCollection) -> beam.PCollection:
-        return pcoll | beam.Map(self._drop_vars)
+def make_url(time):
+    return URL_FORMAT.format(time=time)
 
 
-AGCD = (
-    beam.Create(pattern.items())
-    | OpenURLWithFSSpec()
+time_concat_dim = ConcatDim("time", dates, nitems_per_file=1)
+pattern = FilePattern(make_url, time_concat_dim)
+
+
+recipe = (
+    beam.Create(pattern.items()) 
+    | OpenURLWithFSSpec() 
     | OpenWithXarray(file_type=pattern.file_type)
-    | DropVars()
     | StoreToZarr(
-        store_name="AGCD.zarr",
+        store_name="test_dataset3.zarr",
         combine_dims=pattern.combine_dim_keys,
-        target_chunks=target_chunks,
         attrs={"meta_yaml_url": meta_yaml_url},
-    )
-    | "Log to carbonplan BQ Catalog Table"
-    >> RegisterDatasetToCatalog(table_id=table_id, dataset_id=dataset_id)
-)
+    ))
+
+
+
+
+
+    # | "Log to carbonplan BQ Catalog Table"
+    # >> RegisterDatasetToCatalog(table_id=table_id, dataset_id=dataset_id)
+
+
+
+# import pandas as pd 
+
+# dataset_ids = ['dataset_1','dataset_2','dataset_3']
+# time_stamps = ['2024-03-21 15:10:00', '2024-03-21 15:15:00', '2024-03-21 15:20:00']
+# dataset_urls = ['s3://carbonplan-scratch/leap_ex/test_dataset1.zarr/','s3://carbonplan-scratch/leap_ex/test_dataset3.zarr/','s3://carbonplan-scratch/leap_ex/test_dataset3.zarr/']
+
+# df = pd.DataFrame({'dataset_id':dataset_ids, 'timestamp': time_stamps, 'dataset_url':dataset_urls})
